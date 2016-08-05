@@ -217,10 +217,10 @@
         ]), gl.STATIC_DRAW);
     }
 
-    function renderQuad(shader, parameters, texture, width, height) {
-        gl.clearColor(1.0,0.0,0.0,1.0);
-        gl.viewport( 0, 0, width, height );
-        
+    function renderQuad(shader, parameters, glTransform, texture, image_width, image_height) {
+        gl.clearColor(0.0,0.0,0.0,1.0);
+        gl.viewport(0, 0, renderCanvas.width, renderCanvas.height);
+
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
         gl.useProgram(shader.program);
 
@@ -250,19 +250,32 @@
             }
         }
 
-        updateRectangle(gl, width, height);
+        // create the transform matrix, adding the missing bottom row
+        var transf = [ glTransform[0], glTransform[1], 0.0,
+                       glTransform[2], glTransform[3], 0.0,
+                       glTransform[4], glTransform[5], 1.0 ];
+        
+        // push the transform to the shaders
+        var key = "transf";
+        var uniformLocation = gl.getUniformLocation(shader.program, key);
+        if ( !uniformLocation ) {
+            throw "Could not access location for uniform: " + key;
+        }
+        gl.uniformMatrix3fv( uniformLocation, false, transf );
+
+	// render sending image coords to vertex shader (and subsequently to fragment shader)
+        updateRectangle(gl, image_width, image_height);
         
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
     }
 
-    function render(enabledElement) {
-        // Resize the canvas
+    function render(enabledElement, glTransform) {
+        // Resize the canvas according to the enabledElement canvas and not the image
         var image = enabledElement.image;
-        renderCanvas.width = image.width;
-        renderCanvas.height = image.height;
+        renderCanvas.width = enabledElement.canvas.width;
+        renderCanvas.height = enabledElement.canvas.height;
 
         var viewport = enabledElement.viewport;
 
@@ -270,7 +283,7 @@
         var shader = getShaderProgram(image);
         var texture = getImageTexture(image);
         var parameters = {
-            "u_resolution": { type: "2f", value: [image.width, image.height] },
+            "u_resolution": { type: "2f", value: [renderCanvas.width, renderCanvas.height] },
             "wc": { type: "f", value: viewport.voi.windowCenter },
             "ww": { type: "f", value: viewport.voi.windowWidth },
             "slope": { type: "f", value: image.slope },
@@ -278,7 +291,7 @@
             //"minPixelValue": { type: "f", value: image.minPixelValue },
             "invert": { type: "i", value: viewport.invert ? 1 : 0 },
         };
-        renderQuad(shader, parameters, texture, image.width, image.height );
+        renderQuad(shader, parameters, glTransform, texture, image.width, image.height );
 
         return renderCanvas;
     }

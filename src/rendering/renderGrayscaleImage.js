@@ -138,23 +138,25 @@
             context.mozImageSmoothingEnabled = true;
         }
 
-        // Save the canvas context state and apply the viewport properties
-        cornerstone.setToPixelCoordinateSystem(enabledElement, context);
-
         var renderCanvas;
         if (enabledElement.options && enabledElement.options.renderer &&
             enabledElement.options.renderer.toLowerCase() === 'webgl') {
             // If this enabled element has the option set for WebGL, we should
             // user it as our renderer.
-            renderCanvas = cornerstone.webGL.renderer.render(enabledElement);
+            // The webgl renderer needs to know the transform
+            var glTransform = cornerstone.internal.calculateTransform(enabledElement);
+            renderCanvas = cornerstone.webGL.renderer.render(enabledElement, glTransform.m);
+            //Render from the smaller webgl render canvas (transform already applied)
+            context.drawImage(renderCanvas, 0,0, renderCanvas.width, renderCanvas.height, 0, 0, renderCanvas.width, renderCanvas.height);
         } else {
             // If no options are set we will retrieve the renderCanvas through the
             // normal Canvas rendering path
+            // Save the canvas context state and apply the viewport properties
+            cornerstone.setToPixelCoordinateSystem(enabledElement, context);
             renderCanvas = getRenderCanvas(enabledElement, image, invalidated);
+            // Draw the render canvas half the image size (because we set origin to the middle of the canvas above)
+            context.drawImage(renderCanvas, 0,0, image.width, image.height, 0, 0, image.width, image.height);
         }
-
-        // Draw the render canvas half the image size (because we set origin to the middle of the canvas above)
-        context.drawImage(renderCanvas, 0,0, image.width, image.height, 0, 0, image.width, image.height);
 
         lastRenderedImageId = image.imageId;
         lastRenderedViewport.windowCenter = enabledElement.viewport.voi.windowCenter;
