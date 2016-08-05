@@ -149,8 +149,60 @@
             imageTexture = generateTexture(image);
             cornerstone.webGL.textureCache.putImageTexture(image, imageTexture);
         }
-        return imageTexture.texture;
+        return imageTexture;
 
+    }
+
+    function generateTexturePart(i, j, maxsize, iw, ih, imageData, dataSpace, format, channels){
+        // Copy the portion of data from imageData for this texture part
+        // what is the position to start read?
+        var readx = i * maxsize;
+        var ready = j * maxsize;
+        // what is the region of imageData to be read?
+        var readw = Math.min(maxsize, iw-readx);
+        var readh = Math.min(maxsize, ih-ready);
+        
+        var readOffset  = (ready * iw + readx) * channels;
+        //dataSpace.fill(0.0);
+        for(var yy = 0; yy < readh; yy++){
+            // copy readw worth of data into dataSpace
+            var readi = readOffset + yy * iw * channels;
+            var writei = yy * maxsize * channels;
+            for(var xx = 0; xx < readw * channels; xx++){
+                dataSpace[writei + xx] = imageData[readi + xx];
+            }
+        }
+        
+        // GL texture configuration
+        var texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, format, maxsize, maxsize, 0, format, gl.UNSIGNED_BYTE, dataSpace);
+
+        var vercoord = new Float32Array([
+            readx + readw, ready + readh,
+            readx, ready + readh,
+            readx + readw, ready,
+            readx, ready
+        ]);
+        // these should all be 1.0 except for the 'edge' textures.
+        tx = readw / maxsize;
+        ty = readh / maxsize;
+        var texcoord = new Float32Array([
+            tx, ty,
+            0, ty,
+            tx, 0.0,
+            0.0, 0.0
+        ]);
+        return {
+            texture: texture,
+            vercoord: vercoord,
+            texcoord: texcoord
+        };
     }
 
     function generateTexture( image ) {
@@ -161,7 +213,6 @@
             int16: gl.RGB,
             rgb: gl.RGB
         };
-
         var TEXTURE_BYTES = {
             int8: 1, // Luminance
             uint16: 2, // Luminance + Alpha
@@ -171,29 +222,35 @@
 
         var imageDataType = getImageDataType(image);
         var format = TEXTURE_FORMAT[imageDataType];
-
-        // GL texture configuration
-        var texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-
+        var channels = TEXTURE_BYTES[imageDataType];
         var imageData = cornerstone.webGL.dataUtilities[imageDataType].storedPixelDataToImageData(image, image.width, image.height);
 
-        gl.texImage2D(gl.TEXTURE_2D, 0, format, image.width, image.height, 0, format, gl.UNSIGNED_BYTE, imageData);
+        // Get the maximum supported texture size, shifted 2 powers of 2 to be safe
+        var maxsize = Math.min(Math.pow(2,Math.ceil(Math.log2(Math.max(image.width, image.height)))), gl.getParameter(gl.MAX_TEXTURE_SIZE) / 4);
+        var columns = Math.ceil(image.width / maxsize);
+        var rows = Math.ceil(image.height / maxsize);
+        var texArray = new Array(columns * rows);
+
+        // For better or for worse I create this array here and pass by reference
+        var dataSpace = new Uint8Array(maxsize*maxsize*channels);
+        var texArray = [];
+        var n = 0;
+        // create each texture
+        for(var i = 0; i < columns; i++){
+            for(var j = 0; j < rows; j++){
+                texArray[n] = generateTexturePart(i, j, maxsize, image.width, image.height, imageData, dataSpace, format, channels);
+                n++;
+            }
+        }
 
         // Calculate the size in bytes of this image in memory
-        var sizeInBytes = image.width * image.height * TEXTURE_BYTES[imageDataType];
+        var sizeInBytes = maxsize * maxsize * columns * rows * channels;
         var imageTexture = {
-            texture: texture,
+            numparts: columns * rows,
+            texArray: texArray,
             sizeInBytes: sizeInBytes
         };
         return imageTexture;
-
     }
 
     function initBuffers() {
@@ -205,7 +262,6 @@
             1, 0,
             0, 0
         ]), gl.STATIC_DRAW);
- 
  
         texCoordBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
@@ -263,12 +319,19 @@
         }
         gl.uniformMatrix3fv( uniformLocation, false, transf );
 
-	// render sending image coords to vertex shader (and subsequently to fragment shader)
-        updateRectangle(gl, image_width, image_height);
-        
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        // render the numparts textures on their respective quads
+        for(var i = 0; i < texture.numparts; i++){
+            // bind the texture coordinate
+            gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, texture.texArray[i].texcoord, gl.STATIC_DRAW);
+            // bind the vertex coordinates
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, texture.texArray[i].vercoord, gl.STATIC_DRAW);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture.texArray[i].texture);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
     }
 
     function render(enabledElement, glTransform) {
